@@ -1,0 +1,552 @@
+#include <iostream>
+using namespace std;
+#include <time.h>
+#include <assert.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "CL/opencl.h"
+#include <string.h>
+#define AOCL_ALIGNMENT 64
+// ACL runtime configuration
+static cl_platform_id platform;
+static cl_device_id device;
+static cl_context context;
+static cl_command_queue queue, queue1;
+static cl_kernel kernel[2];
+static cl_program program, program1;
+static cl_int status;
+
+#define ETH_DATA_INPUT
+#define R_HASH_COUNT_ENABLE
+#define R_PROBE_COUNTER_ENABLE
+#define RAND_RANGE(N) ((float)rand() / ((float)RAND_MAX + 1) * (N))//((double)rand() / ((double)RAND_MAX + 1) * (N))
+#define END_FLAG 0x7ffffff0
+static int seeded = 0;
+static unsigned int seedValue;
+//int create_relation_pk(relation_t *relation, int num_tuples)
+//assign some values to the input tuple[][]. yes,
+//we can use some data which they are using in papers.
+int create_relation_pk(unsigned int *tuple_addr, int num_tuples)
+{
+    int i;
+    for (i = 0; i < num_tuples; i++) {
+        tuple_addr[2*i  ] = (i+1);   //+1
+		    tuple_addr[2*i+1] = (i+2);   //+2
+    }
+#if 1
+    for (i = num_tuples - 1; i > 0; i--) {   //knuth_shuflle
+        int  j              = RAND_RANGE(i);
+        int tmp = tuple_addr[2*i];        //intkey_t tmp            = relation->tuples[i].key;
+        tuple_addr[2*i] = tuple_addr[2*j];//relation->tuples[i].key = relation->tuples[j].key;
+        tuple_addr[2*j] = tmp;            //relation->tuples[j].key = tmp;
+    }
+    for (i = num_tuples -1; i > num_tuples -5; i --){
+        tuple_addr[2*i] = num_tuples - i;
+        tuple_addr[2*i + 1] = END_FLAG;
+    }
+#endif
+    return 0;
+}
+
+static const size_t workSize = 128*1;
+//static const size_t gworkSize = workSize*4*4;
+static const size_t gworkSize_build = workSize*1;
+static const size_t gworkSize_probe = workSize*4*4;
+
+char bin_file[] = "./shj_merge_update.aocx";
+
+static void dump_error(const char *str, cl_int status) {
+  printf("%s\n", str);
+  printf("Error code: %d\n", status);
+}
+
+unsigned int  rTupleNum, sTupleNum, rHashTableBucketNum, matchedTableBucketNum, hashBucketSize, preSearchNum, partitionNum;
+cl_int  err;         //flag for OpenCL API functions
+cl_bool successFlag; //flag for user-defined functions
+
+int main(int argc, char** argv)
+{
+  cl_uint num_platforms;
+  cl_uint num_devices;
+  status = clGetPlatformIDs(1, &platform, &num_platforms);
+  if(status != CL_SUCCESS) {
+    dump_error("Failed clGetPlatformIDs.", status);
+    return 1;
+  }
+  if(num_platforms != 1) {
+    printf("Found %d platforms!\n", num_platforms);
+    return 1;
+  }
+  status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 1, &device, &num_devices);
+  if(status != CL_SUCCESS) {
+    dump_error("Failed clGetDeviceIDs.", status);
+    return 1;
+  }
+  if(num_devices != 1) {
+    printf("Found %d devices!\n", num_devices);
+    return 1;
+  }
+  context = clCreateContext(0, 1, &device, NULL, NULL, &status);
+  if(status != CL_SUCCESS) {
+    dump_error("Failed clCreateContext.", status);
+    return 1;
+  }
+  queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
+  if(status != CL_SUCCESS) {
+    dump_error("Failed clCreateCommandQueue.", status);
+    return 1;
+  }
+  cl_int kernel_status;
+  FILE* fp = fopen(bin_file, "rb"); //SHJ_a10_1 SHJ_a10_4
+  if (fp == NULL) {
+    printf("Failed to open shj.aocx file (fopen).\n");
+	return -1;
+  }
+  fseek(fp, 0, SEEK_END);
+  size_t binary_length = ftell(fp);
+  unsigned char*binary = (unsigned char*) malloc(sizeof(unsigned char) * binary_length);
+  assert(binary && "Malloc failed");
+  rewind(fp);
+  if (fread((void*)binary, binary_length, 1, fp) == 0) {
+    printf("Failed to read from seperated_kernel_1.aocx file (fread).\n");
+	return -1;
+  }
+  fclose(fp);
+  program = clCreateProgramWithBinary(context, 1, &device, &binary_length, (const unsigned char**)&binary, &kernel_status, &status);
+  if(status != CL_SUCCESS || kernel_status != CL_SUCCESS) {
+    dump_error("Failed clCreateProgramWithBinary.", status);
+    return 1;
+  }
+  // create the kernel
+  const char *kernel_name  = "hash_div_func";
+  // build the program
+  status = clBuildProgram(program, 0, NULL, "", NULL, NULL);   //1, build
+  if(status != CL_SUCCESS) {
+    dump_error("Failed clBuildProgram.", status);
+    return 1;
+  }
+  // create the kernel
+  kernel[0] = clCreateKernel(program, kernel_name, &status);
+  if(status != CL_SUCCESS) {
+    dump_error("Failed clCreateKernel.", status);
+    return 1;
+  }
+  const char *kernel1_name  = "update_table";
+ 
+  // create the kernel
+  kernel[1] = clCreateKernel(program, kernel1_name, &status);
+  if(status != CL_SUCCESS) {
+    dump_error("Failed clCreateKernel.", status);
+    return 1;
+  }
+    int factor = 1024;
+    // generally the stupleNum >> rtupleNum
+  	rTupleNum = 0x1000000/factor;//16318*1024; //16 * 1024 * 1204 ;
+		sTupleNum = 0x1000000/factor;//16318*1024; //16 * 1024 * 1024;
+
+		rHashTableBucketNum = 4 * 1024 * 1024 / factor; //32*1024; //0x400000; //
+		hashBucketSize      = 4*rTupleNum / rHashTableBucketNum;
+
+    unsigned int *rTableOnHost   = NULL;
+	  unsigned int *sTableOnHost   = NULL;
+		unsigned int *rHashTableOnHost = NULL;
+    posix_memalign ((void **)&rTableOnHost, AOCL_ALIGNMENT, sizeof(unsigned int) * 2 * rTupleNum);
+    posix_memalign ((void **)&sTableOnHost, AOCL_ALIGNMENT, sizeof(unsigned int) * 2 * sTupleNum);
+    posix_memalign ((void **)&rHashTableOnHost, AOCL_ALIGNMENT, sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum);
+
+    memset (rHashTableOnHost, 0, sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum);
+    //printf("rHashTableBucketNum = 0x%x,hashBucketSize = %d\n", rHashTableBucketNum, hashBucketSize);
+		srand((unsigned int)time(NULL));
+    // create the data set
+#ifdef ETH_DATA_INPUT
+       printf("using ETH_DATA_INPUT::::\n");
+       create_relation_pk(rTableOnHost, rTupleNum);
+#else
+		for (int i = 0, j = 0; i < rTupleNum; i++, j += 2)
+		{
+/*			if (i < (int)(rTupleNum * 0.089)) //skew = 0.22
+			{
+				rTableOnHost[j]   = 47987;
+				rTableOnHost[j+1] = 54346;
+			}
+			else
+*/
+			{
+				rTableOnHost[j]   = ( rand() % 256 ) * rTupleNum + i;
+				rTableOnHost[j+1] = ( rand() % 256 ) * rTupleNum + i + 1;
+			}
+		}
+
+#endif
+ // the compare table which use the CPU to generate to verify the result...
+		unsigned int * rHashTableOnHost_cmp = (unsigned int *)malloc(sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum);
+		memset (rHashTableOnHost_cmp, 0, sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum);
+ /*{
+	int tid = 0;
+	int size = rTupleNum;
+	int offset = 0;
+	int count;
+
+	while (tid < 0x1000000)
+	{
+		int key = rTableOnHost[offset * 2 + tid * 2 + 0];
+		int val = rTableOnHost[offset * 2 + tid * 2 + 1];
+
+			int hash = key % rHashTableBucketNum; //sim_hash(key,rHashTableBucketNum);
+//			hash = djb2_hash(key,rHashTableBucketNum);
+
+			//check to find the free memory address
+			 count = 0;
+			while(count < hashBucketSize)
+			{
+				if(rHashTableOnHost_cmp[hash * hashBucketSize * 2 + count * 2 + 0] == 0)
+				{
+					rHashTableOnHost_cmp[hash * hashBucketSize * 2 + count * 2 + 0] = key;
+					rHashTableOnHost_cmp[hash * hashBucketSize * 2 + count * 2 + 1] = val;
+//					printf("%d_%d_%d: 0x%x, 0x%x\n ", tid, count,size, key, val);
+					break;
+				}
+				else count++;
+			}
+
+		tid += 1;
+	 }
+  } */
+
+		cl_mem rTableOnDevice = clCreateBuffer(context,CL_MEM_READ_WRITE,sizeof(unsigned int) * 2 * rTupleNum,0,&status);
+		if (status != CL_SUCCESS){
+			cout << "Create rTableOnDevice failed" << endl;
+			exit(1);
+		}
+		cl_mem rHashTable = clCreateBuffer(context,CL_MEM_READ_WRITE,sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum,0,&status);
+		if (status != CL_SUCCESS){
+			cout << "Create rHashTable failed" << endl;
+			exit(1);
+		}
+		//write R table on host into device buffer
+		status = clEnqueueWriteBuffer(queue,rTableOnDevice,CL_TRUE,0,sizeof(unsigned int) * 2 * rTupleNum,rTableOnHost,0,NULL,NULL);
+		if (status != CL_SUCCESS){
+			cout << "writing  R table into buffer failed" << endl;
+			exit(1);
+		}
+		status = clEnqueueWriteBuffer(queue,rHashTable,CL_TRUE,0,sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum,rHashTableOnHost,0,NULL,NULL);
+		if (status != CL_SUCCESS){
+			cout << "writing  R table into buffer failed" << endl;
+			exit(1);
+		}
+
+    // initial the tHist buffer fot device.....
+ 	  unsigned int * tHist_host = NULL;
+    posix_memalign ((void **)&tHist_host, AOCL_ALIGNMENT, rHashTableBucketNum*sizeof(unsigned int)*128);
+    memset(tHist_host, 0, rHashTableBucketNum*sizeof(unsigned int)*128);
+
+    cl_mem tHist = clCreateBuffer(context,CL_MEM_READ_WRITE,sizeof(unsigned int) * rHashTableBucketNum * 128,0,&status);
+		if (status != CL_SUCCESS){
+			cout << "Create tHist failed" << endl;
+			exit(1);
+		}
+		status = clEnqueueWriteBuffer(queue,tHist,CL_TRUE,0,sizeof(unsigned int) * rHashTableBucketNum * 128,tHist_host,0,NULL,NULL);
+		if (status != CL_SUCCESS){
+			cout << "writing  tHist  into buffer failed" << endl;
+			exit(1);
+		}
+   // free(tHist_host);
+
+//maybe this is for testing the probability of each buckets. 
+#ifdef R_HASH_COUNT_ENABLE
+    printf("R_HASH_COUNT_ENABLE \n");
+		unsigned int * rHashCount_host = NULL;
+    posix_memalign ((void **)&rHashCount_host, AOCL_ALIGNMENT, rHashTableBucketNum*sizeof(unsigned int));
+    memset(rHashCount_host, 0, rHashTableBucketNum*sizeof(unsigned int));
+
+    printf("rHashTableBucketNum = 0x%x\n", rHashTableBucketNum);
+	  for (int i = 0; i < rTupleNum; i++){
+	     int hashbuck = rTableOnHost[2*i] & (rHashTableBucketNum-1); // this is the hash function la
+		   rHashCount_host[hashbuck]++;
+	  }
+	  for (int i=0; i<54;i++){
+		          printf("0x%x\t", rHashCount_host[i] );
+		}
+	  for (int i = 0; i < rHashTableBucketNum; i++){
+		  if ( rHashCount_host[i] != (rTupleNum/rHashTableBucketNum) )
+			   printf("ETH index 0x%d: %d, not %d\n", i, rHashCount_host[i], (rTupleNum/rHashTableBucketNum) );
+	  }
+	    memset(rHashCount_host, 0, rHashTableBucketNum*sizeof(unsigned int));
+   		cl_mem rHashCount = clCreateBuffer(context,CL_MEM_READ_WRITE,sizeof(unsigned int) * rHashTableBucketNum,0,&status);
+		if (status != CL_SUCCESS){
+			cout << "Create rHashCount failed" << endl;
+			exit(1);
+		}//
+		status = clEnqueueWriteBuffer(queue,rHashCount,CL_TRUE,0,sizeof(unsigned int) * rHashTableBucketNum,rHashCount_host,0,NULL,NULL);
+		if (status != CL_SUCCESS){
+			cout << "writing  rHashCount table into buffer failed" << endl;
+			exit(1);
+		}
+#endif
+//		free(rTableOnHost);
+			if (err != CL_SUCCESS)
+			{
+				cout << "build buildHashTableOnCPU kernel failed" << endl;
+				exit(-1);
+			}
+      cl_uint fpga_offset = 0;
+      cl_uint fpga_size   = rTupleNum;
+			//configure CPU kernel
+			clSetKernelArg(kernel[0],0,sizeof(cl_mem),&rTableOnDevice);
+			clSetKernelArg(kernel[0],1,sizeof(cl_mem),&rHashTable);
+			clSetKernelArg(kernel[0],2,sizeof(cl_uint),(void*)&fpga_offset);
+			clSetKernelArg(kernel[0],3,sizeof(cl_uint),(void*)&fpga_size);
+			clSetKernelArg(kernel[0],4,sizeof(cl_uint),(void*)&rHashTableBucketNum);
+			clSetKernelArg(kernel[0],5,sizeof(cl_uint),(void*)&hashBucketSize);
+#ifdef R_HASH_COUNT_ENABLE
+      clSetKernelArg(kernel[0],6,sizeof(cl_mem),(void*)&rHashCount);
+#endif
+			clSetKernelArg(kernel[1],0,sizeof(cl_mem),&rHashTable);
+			clSetKernelArg(kernel[1],1,sizeof(cl_uint),(void*)&hashBucketSize);
+    cl_event event1;
+    clFinish(queue); //timer
+    clock_t beforequeue = clock();
+    printf("kernel : build the hash table \n");
+// start the kernel ------
+		err = clEnqueueTask(queue, kernel[0], 0, NULL, NULL);
+		err = clEnqueueTask(queue, kernel[1], 0, NULL, NULL);
+			if (err != CL_SUCCESS)
+			{
+				cout << "buildHashTableOnCPU kernel execution failed!" << endl;
+				cout << "error code: " << err << endl;
+			}
+    clFinish(queue);
+      //clWaitForEvents(1 , &event1);
+    clock_t afterqueue = clock(); 
+    double timeinsec=(double)(afterqueue-beforequeue)/(double)CLOCKS_PER_SEC;
+    printf("hash table build time: %0.4f \n", timeinsec);
+//caculate the runtime
+  /*  printf("kernel : finish building the hash table \n");
+    cl_ulong time_start, time_end;
+    double total_time;
+    clGetEventProfilingInfo(event1, CL_PROFILING_COMMAND_START, sizeof(time_start), &time_start, NULL);
+    clGetEventProfilingInfo(event1, CL_PROFILING_COMMAND_END, sizeof(time_end), &time_end, NULL);
+    total_time = time_end - time_start;
+    printf("hash table(len: 0x%x) time = %0.3f ms\n", rTupleNum, (total_time / 1000000.0) );
+*/
+#if 1  //DATA_PRINT
+    {
+      int i,j, flag;
+			int buck_len;
+			unsigned int *buck_p;
+			int total_len = 0;
+		  status = clEnqueueReadBuffer(queue,tHist,CL_TRUE,0,sizeof(unsigned int) * 128 * rHashTableBucketNum,tHist_host,0,NULL,NULL);
+      if (status != CL_SUCCESS){
+			  cout << "writing tHist table host failed" << endl;
+			  exit(1);
+      }
+      printf("Copy:the tHist to host ! \n");
+      printf("\n\n");
+	  for (i=0; i<128 * rHashTableBucketNum;i++){
+       // if(tHist_host[i] !=0)
+      //       printf("0x%x\t", tHist_host[i] );
+    }
+		  status = clEnqueueReadBuffer(queue,rHashTable,CL_TRUE,0,sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum,rHashTableOnHost,0,NULL,NULL);
+      if (status != CL_SUCCESS){
+			cout << "writing hash count table host failed" << endl;
+			exit(1);
+		  }
+      printf("Copy:the hash table to host ! \n");
+
+		#ifdef R_HASH_COUNT_ENABLE
+		status = clEnqueueReadBuffer(queue,rHashCount,CL_TRUE,0,sizeof(unsigned int) * rHashTableBucketNum,rHashCount_host,0,NULL,NULL);
+    if (status != CL_SUCCESS){
+			cout << "writing hash count table host failed" << endl;
+			exit(1);
+		}
+      cout << "Copy : the hash count to host !"<<endl;
+  #if 1
+    printf("\n\n");
+		for (i=0; i<rHashTableBucketNum;i++){
+    //  if(rHashCount_host[i] != 0)
+      //     printf("cnt0x%x\t", rHashCount_host[i] );
+    }
+  #else
+       for (i=0; i<(32<<10);i++)
+         {
+           if (rHashCount_host[i] != rTupleNum/(32<<10))
+             printf("index_0x%x: 0x%x (not 0x%x)\n", i, rHashCount_host[i], rTupleNum/(32<<10) );
+         }
+  #endif
+#endif
+
+// check the result with CPU .........
+      for (i = 0; i < rHashTableBucketNum; i++)
+			{
+				buck_len = 0;
+				buck_p = rHashTableOnHost + hashBucketSize*i*2;
+				for (j = 0; j < hashBucketSize; j++)
+				{
+				  if (((buck_p[2*j] % rHashTableBucketNum) != i) && (buck_p[2*j] != 0) )//hash value compare
+					   printf("hash data with key: 0x%x to wrong bucket 0x%x\n", buck_p[2*j],i);
+				  else if ( ( ( buck_p[2*j] % rHashTableBucketNum) == i ) && (buck_p[2*j] != 0))
+					   buck_len++;
+				  else
+					   break;
+				}
+				if ( buck_len != (rTupleNum/rHashTableBucketNum) )
+            printf("error bucket index: 0x%x is %d (not %d)\n", i, buck_len,(rTupleNum/rHashTableBucketNum));
+				total_len += buck_len;
+			}
+			printf("hash table total_len is 0x%x\n", total_len);
+
+      for(int i = 0; i < rTupleNum; i++) //(int i = rTupleNum-20; i < rTupleNum; i++)
+      {
+			if ( (rTableOnHost[2*i]&(rHashTableBucketNum-1)) == 0)
+	          printf("id_0x%x: 0x%x\t", i, rTableOnHost[2*i] );
+      }
+	  	printf("\n");
+/*        flag = memcmp (rHashTableOnHost_cmp, rHashTableOnHost, sizeof(unsigned int) * 2 * hashBucketSize * rHashTableBucketNum);
+		  if (flag != 0)
+			    printf("the hash join build is not right\n" );
+		  else
+			    printf("the hash join build is right\n" );*/
+		 }
+#endif
+///////////////////////////////////////////////////////
+		/*probe: relation S is probed,based on the R....*/
+//////////////////////////////////////////////////////
+#if 0
+		matchedTableBucketNum = 2 * sTupleNum;
+	  srand((unsigned int)time(NULL));
+#ifdef ETH_DATA_INPUT
+       create_relation_pk(sTableOnHost, sTupleNum);
+#else
+	for (int i = 0, j = 0; i < sTupleNum; i++, j += 2)
+		{
+				sTableOnHost[j]   =  rTableOnHost[j];// ( rand() % 256 ) * sTupleNum + i; //
+				sTableOnHost[j+1] = ( rand() % 256 ) * sTupleNum + i + 1;
+		}
+#endif
+		//rHashTable is the hash table for R table
+		cl_mem sTableOnDevice = clCreateBuffer(context,CL_MEM_READ_WRITE,sizeof(unsigned int) * 2 * sTupleNum,0,&status);
+		if (status != CL_SUCCESS){
+			cout << "Create sTableOnDevice failed" << endl;
+			exit(1);
+		}
+		status = clEnqueueWriteBuffer(queue,sTableOnDevice,CL_TRUE,0,sizeof(unsigned int) * 2 * sTupleNum,sTableOnHost,0,NULL,NULL);
+		if (status != CL_SUCCESS){
+			cout << "writing  S table into buffer failed" << endl;
+			exit(1);
+		}
+	//	free(sTableOnHost);
+		cl_mem matchedTable = clCreateBuffer(context,CL_MEM_READ_WRITE,sizeof(unsigned int) * 3 * matchedTableBucketNum, 0,&status);
+		if (status != CL_SUCCESS){
+			cout << "Create matchedTable failed" << endl;
+			exit(1);
+		}
+
+		unsigned int * matchedTableOnHost = NULL;
+    posix_memalign ((void **)&matchedTableOnHost, AOCL_ALIGNMENT, sizeof(unsigned int) * 3 * matchedTableBucketNum);
+		memset (matchedTableOnHost, 0, sizeof(unsigned int) * 3 * matchedTableBucketNum);
+	//	matchedTableOnHost[0] = 1;
+
+		//write R table on host into device buffer
+		status = clEnqueueWriteBuffer(queue,matchedTable,CL_TRUE,0,sizeof(unsigned int) * 3 * matchedTableBucketNum,matchedTableOnHost,0,NULL,NULL);
+		if (status != CL_SUCCESS){
+			cout << "writing  R table into buffer failed" << endl;
+			exit(1);
+		}
+
+		kernel1 = clCreateKernel(program,"probeHashTable",&status);
+		if (status != CL_SUCCESS){
+			cout << "build probeHashTableOnCPU kernel failed" << endl;
+			exit(-1);
+		}
+
+		cl_uint cpuOffset = 0, cpuSize = (cl_uint)(sTupleNum);
+
+		clSetKernelArg(kernel1,0,sizeof(cl_mem),&rHashTable);
+		clSetKernelArg(kernel1,1,sizeof(cl_mem),&sTableOnDevice);
+		clSetKernelArg(kernel1,2,sizeof(cl_mem),&matchedTable);
+		clSetKernelArg(kernel1,3,sizeof(cl_uint),(void*)&cpuOffset);
+		clSetKernelArg(kernel1,4,sizeof(cl_uint),(void*)&cpuSize);
+		clSetKernelArg(kernel1,5,sizeof(cl_uint),(void*)&rHashTableBucketNum);
+		clSetKernelArg(kernel1,6,sizeof(cl_uint),(void*)&hashBucketSize);
+#ifdef R_PROBE_COUNTER_ENABLE
+		clSetKernelArg(kernel1,7,sizeof(cl_mem),&rHashCount);
+#endif
+	// beforequeue = clock();
+		err = clEnqueueNDRangeKernel(queue,kernel1,1,NULL,&gworkSize_probe,&workSize,0,NULL,&event1);
+		if (err != CL_SUCCESS)
+		{
+			cout << "probeHashTableOnCPU kernel execution failed!" << endl;
+			cout << "error code: " << err << endl;
+		}
+		clFinish(queue);
+	// afterqueue = clock();
+	// timeinsec=(double)(afterqueue-beforequeue)/(double)CLOCKS_PER_SEC;
+	//printf("hash table probe time: %0.4f \n", timeinsec);
+{
+   cl_ulong time_start, time_end;
+   double total_time;
+   clGetEventProfilingInfo(event1, CL_PROFILING_COMMAND_START, sizeof(time_start), &time_start, NULL);
+   clGetEventProfilingInfo(event1, CL_PROFILING_COMMAND_END, sizeof(time_end), &time_end, NULL);
+   total_time = time_end - time_start;
+   printf("probe table(len: 0x%x) time = %0.3f ms\n", sTupleNum, (total_time / 1000000.0) );
+ }
+#if 1  //DATA_PRINT
+		{
+			int i,j, flag;
+			int buck_len = 0;
+			unsigned int *buck_p;
+			int total_len = 0;
+		   status = clEnqueueReadBuffer(queue,matchedTable,CL_TRUE,0,sizeof(unsigned int) * 3 * matchedTableBucketNum,matchedTableOnHost,0,NULL,NULL);
+
+			for (i=0; i<54;i++)
+			{
+		          printf("0x%x\t", matchedTableOnHost[i] );//matchedTableOnHost
+			}
+/*
+			printf("\n ////////////////\n");
+			unsigned int *log_out = matchedTableOnHost + 3*matchedTableOnHost[0];
+			for (i=0; i<54;i++)
+			{
+		          printf("0x%x\t", log_out[i] );//matchedTableOnHost
+			}
+*/
+/*		printf("\nrHashTableBucketNum = 0x%x\n", rHashTableBucketNum);
+			printf("hashBucketSize = 0x%x\n", hashBucketSize);
+			printf("sTupleNum = 0x%x\n", sTupleNum);
+*/
+			for (i = 0; i < sTupleNum; i++)
+			{
+			  unsigned int key = sTableOnHost[2*i + 0];
+			  unsigned int hash = key % rHashTableBucketNum;
+
+			//   buck_len += hash;
+//				buck_p = rHashTableOnHost + hashBucketSize*hash*2;
+
+				for (j = 0; j < hashBucketSize; j++)
+				{
+/*					if ((int)buck_p > (int)(rHashTableOnHost + hashBucketSize*rHashTableBucketNum*2))
+					{
+						printf("%d %d:  0x%x 0x%x 0x%x\n", i, j,key, hash, (int)(buck_p) );
+						break;
+					}
+*/
+					//buck_len += buck_p[0];
+          if (( rHashTableOnHost[hashBucketSize*hash*2 + 2*j] != 0) & (rHashTableOnHost[hashBucketSize*hash*2 + 2*j]  == key) )
+				  {
+					 buck_len++;
+//					 printf("%d, %d: 0x%x\n", i, j, key); //buck_p[2*j]
+				  }
+				  else if ( rHashTableOnHost[hashBucketSize*hash*2 + 2*j] == 0)
+					  break;
+    //			  else
+	//				  buck_len++;
+				 }
+			}
+
+			printf("\nbuck_len = 0x%x\n", buck_len);
+		}
+#endif
+#endif
+ // system("pause");
+	return 0;
+}
