@@ -17,7 +17,10 @@ cl_device_id device;
 cl_context context;
 cl_command_queue queue_relRead;
 cl_command_queue queue_hashjoin;
+cl_command_queue queue_gather;
+
 cl_kernel kernel_hashjoin;
+cl_kernel kernel_gather;
 cl_kernel kernel_relRead;
 cl_program program;
 cl_int status;
@@ -33,7 +36,7 @@ unsigned int * sTableReadRange = NULL;
 
 int factor = 4;
 unsigned int rTupleNum = 1024*256*1;//0x1000000/factor;//16318*1024; //16 * 1024 * 1204 ;
-unsigned int sTupleNum = 1;//1024*256*0;//16318*1024; //16 * 1024 * 1024;
+unsigned int sTupleNum = 1;//1024*256*1;//16318*1024; //16 * 1024 * 1024;
 unsigned int rHashTableBucketNum = 4 * 1024 * 1024 / factor; //32*1024; //0x400000; //
 unsigned int hashBucketSize      = 4*rTupleNum / rHashTableBucketNum;
 unsigned int rTableSize = sizeof(unsigned int)*2*rTupleNum;
@@ -50,6 +53,12 @@ int setKernelEnv(){
         return 1;
     }
     queue_hashjoin = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
+    if(status != CL_SUCCESS) {
+        dump_error("Failed clCreateCommandQueue.", status);
+        freeResources();
+        return 1;
+    }
+    queue_gather = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
     if(status != CL_SUCCESS) {
         dump_error("Failed clCreateCommandQueue.", status);
         freeResources();
@@ -196,9 +205,15 @@ int main(int argc, char *argv[]) {
 	*/
     printf("Launching the hash join kernel...\n");
 
-		cl_event event_hashjoin, event_relRead;
+		cl_event event_hashjoin, event_relRead, event_gather;
 		//status = clEnqueueNDRangeKernel(queue,kernel,1,NULL,&gworkSize_build,&workSize,0,NULL,&event1);
 		status = clEnqueueTask(queue_relRead, kernel_relRead, 0, NULL, &event_relRead);
+		if (status != CL_SUCCESS) {
+			dump_error("Failed to launch kernel.", status);
+			freeResources();
+			return 1;
+		}
+		status = clEnqueueTask(queue_gather, kernel_gather, 0, NULL, &event_gather);
 		if (status != CL_SUCCESS) {
 			dump_error("Failed to launch kernel.", status);
 			freeResources();
@@ -212,6 +227,7 @@ int main(int argc, char *argv[]) {
 		}
 		const double start_time = getCurrentTimestamp();
 		clFinish(queue_relRead);
+		clFinish(queue_gather);
 		clFinish(queue_hashjoin);
 		const double end_time = getCurrentTimestamp();
 		printf("kernel : finish building the hash table \n");
@@ -225,7 +241,7 @@ int main(int argc, char *argv[]) {
 		total_time = time_end - time_start;
 		printf("[INFO] hash join kernel(len: 0x%x) time = %0.3f ms\n", rTupleNum, (total_time / 1000000.0) );
   
-    clGetEventProfilingInfo(event_relRead, CL_PROFILING_COMMAND_START, sizeof(time_start), &time_start, NULL);
+    	clGetEventProfilingInfo(event_relRead, CL_PROFILING_COMMAND_START, sizeof(time_start), &time_start, NULL);
 		clGetEventProfilingInfo(event_relRead, CL_PROFILING_COMMAND_END, sizeof(time_end), &time_end, NULL);
 		total_time = time_end - time_start;
 		printf("[INFO] relation read kernel(len: 0x%x) time = %0.3f ms\n", rTupleNum, (total_time / 1000000.0) );

@@ -108,112 +108,63 @@ __kernel void hashjoin (
       hashtable_l[i] = init_value;
     }
 */
+  
     uint rTableReadNum = rTableReadRange[0].y;
-    bool engine_finish[16] = {false};  
-
-    uint2 data_r[8][16];
-    bool valid_r[8][16];
-    #pragma unroll 16
-      for(int i = 0; i < 16; i ++){
-      #pragma unroll 8
-        for(int j = 0; j < 8; j ++)
-          valid_r[j][i] = false;
-      } 
 
     while(true){
+
+      bool engine_finish[16] = {false};
+
       #pragma unroll 16
         for(int i = 0; i < 16; i ++){ 
         // each collect engine do their work 
+          bool valid_r[8];
+          uint2 data_r[8];
+        #pragma unroll 8
+          for(int i  = 0; i < 8; i++){
+            valid_r[i] = false;
+            data_r[i].x = 0;
+            data_r[i].y = 0;
+          }
           #pragma unroll 8
             for(int j = 0; j < 8; j ++){  
-              data_r[j][i] = read_channel_nb_altera(relR[j][i], &valid_r[j][i]);
+              data_r[j] = read_channel_nb_altera(relR[j][i], &valid_r[j]);        
             }
+
             // low is active
-            engine_finish[i] = valid_r[0][i] | valid_r[1][i] | valid_r[2][i] | valid_r[3][i] | 
-                               valid_r[4][i] | valid_r[5][i] | valid_r[6][i] | valid_r[7][i] ;
+            engine_finish[i] = valid_r[0] | valid_r[1] | valid_r[2] | valid_r[3] | 
+                               valid_r[4] | valid_r[5] | valid_r[6] | valid_r[7] ;
 
-              if(valid_r[0][i]){
-                uint key  = data_r[0][i].x; 
-                uint val  = data_r[0][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[0][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
 
-              else if(valid_r[1][i]){
-                uint key  = data_r[1][i].x; 
-                uint val  = data_r[1][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[1][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[2][i]){
-                uint key  = data_r[2][i].x; 
-                uint val  = data_r[2][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[2][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[3][i]){
-                uint key  = data_r[3][i].x; 
-                uint val  = data_r[3][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[3][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[4][i]){
-                uint key  = data_r[4][i].x; 
-                uint val  = data_r[4][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[4][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[5][i]){
-                uint key  = data_r[5][i].x; 
-                uint val  = data_r[5][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[5][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[6][i]){
-                uint key  = data_r[6][i].x; 
-                uint val  = data_r[6][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[6][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[7][i]){
-                uint key  = data_r[7][i].x; 
-                uint val  = data_r[7][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[7][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-          /* 
-            for(int j = 0; j < 8; j ++){  
-                if(valid_r[j] == 0) continue;
-                uint key  = data_r[j].x; 
-                uint val  = data_r[j].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[j];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
+          for(int k = 0; k < 7; k++){
+            for(int w = 0; w < 7; w++){
+              #pragma unroll
+                for(int j = k; j < 7; ++j){
+                  data_r[j] = data_r[j + 1];
+                  valid_r[j] = valid_r[j + 1];
+                }
+                valid_r[7] = 0;
+                if(valid_r[k]) break; 
             }
-          */
+            //printf("current k %d \n", k);
+          }
+
+        /*  for(int j = 0; j < 8; j ++){  
+            if(i == 0)
+            {
+              printf(" %d, %d\t",data_r[j].x, valid_r[j]);
+            }
+          }
+        */
+          for(int j = 0; j < 8; j ++){  
+              if(!valid_r[j]) break;
+              uint key  = data_r[j].x; 
+              uint val  = data_r[j].y;
+              uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
+              hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[j];
+              hashtable_bucket_cnt[hash_idx][i] ++; 
+             // printf("key %d \n", key);
+          }
         //--------------------------------//
 
         }

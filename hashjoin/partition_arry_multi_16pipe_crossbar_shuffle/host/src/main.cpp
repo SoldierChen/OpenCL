@@ -33,7 +33,7 @@ unsigned int * sTableReadRange = NULL;
 
 int factor = 4;
 unsigned int rTupleNum = 1024*256*1;//0x1000000/factor;//16318*1024; //16 * 1024 * 1204 ;
-unsigned int sTupleNum = 1;//1024*256*0;//16318*1024; //16 * 1024 * 1024;
+unsigned int sTupleNum = 1;//1024*256*1;//16318*1024; //16 * 1024 * 1024;
 unsigned int rHashTableBucketNum = 4 * 1024 * 1024 / factor; //32*1024; //0x400000; //
 unsigned int hashBucketSize      = 4*rTupleNum / rHashTableBucketNum;
 unsigned int rTableSize = sizeof(unsigned int)*2*rTupleNum;

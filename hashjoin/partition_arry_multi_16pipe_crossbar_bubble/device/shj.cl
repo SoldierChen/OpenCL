@@ -1,11 +1,13 @@
 /* simple hash join on BRAM */
 //----channel define----//
 #define ENDFLAG 0xffff
-channel uint2 relR[8][16] __attribute__((depth(8)));
-channel uint2 relS[8][16] __attribute__((depth(8)));
-channel uint relRendFlagCh __attribute__((depth(128)));
-channel uint relSendFlagCh __attribute__((depth(128)));
+channel uint2 relR[8][16] __attribute__((depth(128)));
+channel uint2 relS[8][16] __attribute__((depth(128)));
+channel uint relRendFlagCh __attribute__((depth(8)));
+channel uint gatherFlagCh __attribute__((depth(8)));
 
+channel uint relSendFlagCh __attribute__((depth(128)));
+channel uint2 buildCh[16] __attribute__((depth(512)));
 
 #define HASH(K, MASK, SKIP) (((K) & MASK) >> SKIP)
 #define RELR_L_NUM 1024*256*1
@@ -87,6 +89,64 @@ __kernel void relRead (
 }
 
 __attribute__((task))
+__kernel void gather (
+                        __global uint * restrict matchedTable, 
+                        __global uint2 * restrict rTableReadRange,  
+                        __global uint2 * restrict sTableReadRange
+                      )
+{
+    bool engine_finish[16];  
+   #pragma unroll 16
+    for(int j = 0; j < 16; j ++)
+      engine_finish[j] = false;
+
+    while(true){
+      #pragma unroll 16
+        for(int i = 0; i < 16; i ++){ 
+        // each collect engine do their work
+    
+          uint2 data_r[8];
+          bool valid_r[8];
+
+          #pragma unroll 8
+            for(int j = 0; j < 8; j ++){
+              valid_r[j] = false;
+            }
+          
+          #pragma unroll 8
+            for(int j = 0; j < 8; j ++){  
+              data_r[j] = read_channel_nb_altera(relR[j][i], &valid_r[j]);
+            }
+            // low is active
+            engine_finish[i] = valid_r[0] | valid_r[1] | valid_r[2] | valid_r[3]| 
+                               valid_r[4] | valid_r[5] | valid_r[6] | valid_r[7];
+            
+            for(int j = 0; j < 8; j ++){  
+               if(valid_r[j])   write_channel_altera(buildCh[i], data_r[j]);
+            }
+
+        }
+
+      // low is active
+      bool all_finish = engine_finish[0] | engine_finish[1] | engine_finish[2] | engine_finish[3] | 
+                        engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] |
+                        engine_finish[8] | engine_finish[9] | engine_finish[10]| engine_finish[11]| 
+                        engine_finish[12]| engine_finish[13]| engine_finish[14]| engine_finish[15];
+
+      bool valid_endflag = false;
+      uint endFlagData;
+      uint endFlag = read_channel_nb_altera (relRendFlagCh, &valid_endflag);
+      if(valid_endflag ) endFlagData =  endFlag;
+      if(endFlagData == ENDFLAG && !all_finish) 
+      { 
+        write_channel_altera(gatherFlagCh, ENDFLAG);
+        break;
+      } 
+  }   
+}
+
+
+__attribute__((task))
 __kernel void hashjoin (
                         __global uint * restrict matchedTable, 
                         __global uint2 * restrict rTableReadRange,  
@@ -109,115 +169,25 @@ __kernel void hashjoin (
     }
 */
     uint rTableReadNum = rTableReadRange[0].y;
-    bool engine_finish[16] = {false};  
-
-    uint2 data_r[8][16];
-    bool valid_r[8][16];
-    #pragma unroll 16
-      for(int i = 0; i < 16; i ++){
-      #pragma unroll 8
-        for(int j = 0; j < 8; j ++)
-          valid_r[j][i] = false;
-      } 
+    bool engine_finish[16];  
+   #pragma unroll 16
+    for(int j = 0; j < 16; j ++)
+      engine_finish[j] = false;
 
     while(true){
       #pragma unroll 16
         for(int i = 0; i < 16; i ++){ 
-        // each collect engine do their work 
-          #pragma unroll 8
-            for(int j = 0; j < 8; j ++){  
-              data_r[j][i] = read_channel_nb_altera(relR[j][i], &valid_r[j][i]);
-            }
+        // each collect engine do their work
             // low is active
-            engine_finish[i] = valid_r[0][i] | valid_r[1][i] | valid_r[2][i] | valid_r[3][i] | 
-                               valid_r[4][i] | valid_r[5][i] | valid_r[6][i] | valid_r[7][i] ;
-
-              if(valid_r[0][i]){
-                uint key  = data_r[0][i].x; 
-                uint val  = data_r[0][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[0][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[1][i]){
-                uint key  = data_r[1][i].x; 
-                uint val  = data_r[1][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[1][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[2][i]){
-                uint key  = data_r[2][i].x; 
-                uint val  = data_r[2][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[2][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[3][i]){
-                uint key  = data_r[3][i].x; 
-                uint val  = data_r[3][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[3][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[4][i]){
-                uint key  = data_r[4][i].x; 
-                uint val  = data_r[4][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[4][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[5][i]){
-                uint key  = data_r[5][i].x; 
-                uint val  = data_r[5][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[5][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[6][i]){
-                uint key  = data_r[6][i].x; 
-                uint val  = data_r[6][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[6][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-
-              else if(valid_r[7][i]){
-                uint key  = data_r[7][i].x; 
-                uint val  = data_r[7][i].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[7][i];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-              }
-          /* 
-            for(int j = 0; j < 8; j ++){  
-                if(valid_r[j] == 0) continue;
-                uint key  = data_r[j].x; 
-                uint val  = data_r[j].y;
-                uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
-                hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= data_r[j];
-                hashtable_bucket_cnt[hash_idx][i] ++; 
-               // printf("key %d \n", key);
-            }
-          */
-        //--------------------------------//
-
+          uint2 tmp_data = read_channel_nb_altera (buildCh[i], &engine_finish[i]);
+          if(engine_finish[i]){
+            uint key  = tmp_data.x; 
+            uint val  = tmp_data.y;
+            uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
+            hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= tmp_data;
+            hashtable_bucket_cnt[hash_idx][i] ++; 
+          }
         }
-
       // low is active
       bool all_finish = engine_finish[0] | engine_finish[1] | engine_finish[2] | engine_finish[3] | 
                         engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] |
@@ -226,10 +196,13 @@ __kernel void hashjoin (
 
       bool valid_endflag = false;
       uint endFlagData;
-      uint endFlag = read_channel_nb_altera (relRendFlagCh, &valid_endflag);
+      uint endFlag = read_channel_nb_altera (gatherFlagCh, &valid_endflag);
       if(valid_endflag ) endFlagData =  endFlag;
       if(endFlagData == ENDFLAG && !all_finish) break; 
     }
+
+
+
     //  probe phrase
     uint matchedCnt[16] = {0}; 
     uint iter = (sTableReadRange[0].y);
