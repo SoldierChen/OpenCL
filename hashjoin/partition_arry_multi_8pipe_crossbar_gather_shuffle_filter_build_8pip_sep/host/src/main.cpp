@@ -18,9 +18,9 @@ cl_context context;
 cl_command_queue queue_relRead;
 cl_command_queue queue_hashjoin;
 cl_command_queue queue_gather;
-cl_command_queue queue_filter;
+cl_command_queue queue_filter[8];
 
-cl_kernel kernel_filter;
+cl_kernel kernel_filter[8];
 cl_kernel kernel_hashjoin;
 cl_kernel kernel_gather;
 cl_kernel kernel_relRead;
@@ -38,7 +38,7 @@ unsigned int * sTableReadRange = NULL;
 
 int factor = 4;
 unsigned int rTupleNum = 1024*256*1;//0x1000000/factor;//16318*1024; //16 * 1024 * 1204 ;
-unsigned int sTupleNum = 1024*256*1;//16318*1024; //16 * 1024 * 1024;
+unsigned int sTupleNum = 1024*256*10;//16318*1024; //16 * 1024 * 1024;
 unsigned int rHashTableBucketNum = 4 * 1024 * 1024 / factor; //32*1024; //0x400000; //
 unsigned int hashBucketSize      = 4*rTupleNum / rHashTableBucketNum;
 unsigned int rTableSize = sizeof(unsigned int)*2*rTupleNum;
@@ -66,12 +66,14 @@ int setKernelEnv(){
         freeResources();
         return 1;
     }
-    queue_filter = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
-    if(status != CL_SUCCESS) {
-        dump_error("Failed clCreateCommandQueue.", status);
-        freeResources();
-        return 1;
-    }
+    for(int i = 0; i < 8; i ++){
+    	queue_filter[i] = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
+    	if(status != CL_SUCCESS) {
+    	    dump_error("Failed clCreateCommandQueue.", status);
+    	    freeResources();
+    	    return 1;
+    	}
+	}
     cl_int kernel_status;
     size_t binsize = 0;
     unsigned char * binary_file = loadBinaryFile("./shj.aocx", &binsize);
@@ -109,7 +111,7 @@ int create_relation_pk(unsigned int *tuple_addr, int num_tuples)
 		tuple_addr[2*i+1] = (i+2);   //+2
 	}
   // shuffle tuples of the relation using Knuth shuffle
-#if 0
+#if 1
     for (i = num_tuples - 1; i > 0; i--) {   //knuth_shuflle
     	  int  j  = RAND_RANGE(i);
         int tmp = tuple_addr[2*i];        //intkey_t tmp            = relation->tuples[i].key;
@@ -213,7 +215,8 @@ int main(int argc, char *argv[]) {
 	*/
     printf("Launching the hash join kernel...\n");
 
-		cl_event event_hashjoin, event_relRead, event_gather, event_filter;
+		cl_event event_hashjoin, event_relRead, event_gather;
+		cl_event event_filter[8];
 		//status = clEnqueueNDRangeKernel(queue,kernel,1,NULL,&gworkSize_build,&workSize,0,NULL,&event1);
 		status = clEnqueueTask(queue_relRead, kernel_relRead, 0, NULL, &event_relRead);
 		if (status != CL_SUCCESS) {
@@ -227,11 +230,13 @@ int main(int argc, char *argv[]) {
 			freeResources();
 			return 1;
 		}
-		status = clEnqueueTask(queue_filter, kernel_filter, 0, NULL, &event_filter);
-		if (status != CL_SUCCESS) {
-			dump_error("Failed to launch kernel.", status);
-			freeResources();
-			return 1;
+		for(int i = 0; i < 8; i++){
+			status = clEnqueueTask(queue_filter[i], kernel_filter[i], 0, NULL, &event_filter[i]);
+			if (status != CL_SUCCESS) {
+				dump_error("Failed to launch kernel.", status);
+				freeResources();
+				return 1;
+			}
 		}
 		status = clEnqueueTask(queue_hashjoin, kernel_hashjoin, 0, NULL, &event_hashjoin);
 		if (status != CL_SUCCESS) {
@@ -242,7 +247,7 @@ int main(int argc, char *argv[]) {
 		const double start_time = getCurrentTimestamp();
 		clFinish(queue_relRead);
 		clFinish(queue_gather);
-		clFinish(queue_filter);
+		clFinish(queue_filter[1]);
 		clFinish(queue_hashjoin);
 		const double end_time = getCurrentTimestamp();
 		printf("kernel : finish building the hash table \n");

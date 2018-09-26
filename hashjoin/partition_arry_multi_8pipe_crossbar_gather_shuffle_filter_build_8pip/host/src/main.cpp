@@ -109,7 +109,7 @@ int create_relation_pk(unsigned int *tuple_addr, int num_tuples)
 		tuple_addr[2*i+1] = (i+2);   //+2
 	}
   // shuffle tuples of the relation using Knuth shuffle
-#if 0
+#if 1
     for (i = num_tuples - 1; i > 0; i--) {   //knuth_shuflle
     	  int  j  = RAND_RANGE(i);
         int tmp = tuple_addr[2*i];        //intkey_t tmp            = relation->tuples[i].key;

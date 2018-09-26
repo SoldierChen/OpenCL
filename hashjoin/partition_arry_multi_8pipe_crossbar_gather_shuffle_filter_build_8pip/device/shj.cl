@@ -11,15 +11,15 @@ typedef struct filterData{
   } filter_type;
 
 #define ENDFLAG 0xffff
-channel uint2 relR[8][16] __attribute__((depth(128)));
-channel uint2 relS[8][16] __attribute__((depth(128)));
+channel uint2 relR[8][8] __attribute__((depth(128)));
+channel uint2 relS[8][8] __attribute__((depth(128)));
 channel uint relRendFlagCh __attribute__((depth(8)));
 channel uint gatherFlagCh __attribute__((depth(8)));
 channel uint filterFlagCh __attribute__((depth(8)));
 
 channel uint relSendFlagCh __attribute__((depth(128)));
-channel uint2 buildCh[16] __attribute__((depth(128)));
-channel filter_type toFilterCh[16] __attribute__((depth(1024)));
+channel uint2 buildCh[8] __attribute__((depth(128)));
+channel filter_type toFilterCh[8] __attribute__((depth(1024)));
 
 #define HASH(K, MASK, SKIP) (((K) & MASK) >> SKIP)
 #define RELR_L_NUM 1024*256*1
@@ -46,7 +46,7 @@ __kernel void relRead (
       #pragma unroll 8
         for(int k = 0; k < 8; k ++){
           uint2 rtable_uint2 = rTable[i+k];
-          switch((rtable_uint2.x) & 0xf){
+          switch((rtable_uint2.x) & 0x7){
             case 0 :  write_channel_altera(relR[k][0], rtable_uint2); break;
             case 1 :  write_channel_altera(relR[k][1], rtable_uint2); break;
             case 2 :  write_channel_altera(relR[k][2], rtable_uint2); break;
@@ -55,14 +55,6 @@ __kernel void relRead (
             case 5 :  write_channel_altera(relR[k][5], rtable_uint2); break;
             case 6 :  write_channel_altera(relR[k][6], rtable_uint2); break;
             case 7 :  write_channel_altera(relR[k][7], rtable_uint2); break;
-            case 8 :  write_channel_altera(relR[k][8], rtable_uint2); break;
-            case 9 :  write_channel_altera(relR[k][9], rtable_uint2); break;
-            case 10 : write_channel_altera(relR[k][10], rtable_uint2); break;
-            case 11 : write_channel_altera(relR[k][11], rtable_uint2); break;
-            case 12 : write_channel_altera(relR[k][12], rtable_uint2); break;
-            case 13 : write_channel_altera(relR[k][13], rtable_uint2); break;
-            case 14 : write_channel_altera(relR[k][14], rtable_uint2); break;
-            case 15 : write_channel_altera(relR[k][15], rtable_uint2); break;
           }
         }
       }
@@ -75,7 +67,7 @@ __kernel void relRead (
       #pragma unroll 8
         for(int k = 0; k < 8; k ++){
           uint2 stable_uint2 = sTable[i + k];
-          switch((stable_uint2.x)& 0xf){
+          switch((stable_uint2.x)& 0x7){
             case 0 :  write_channel_altera(relS[k][0], stable_uint2); break;
             case 1 :  write_channel_altera(relS[k][1], stable_uint2); break;
             case 2 :  write_channel_altera(relS[k][2], stable_uint2); break;
@@ -84,14 +76,6 @@ __kernel void relRead (
             case 5 :  write_channel_altera(relS[k][5], stable_uint2); break;
             case 6 :  write_channel_altera(relS[k][6], stable_uint2); break;
             case 7 :  write_channel_altera(relS[k][7], stable_uint2); break;
-            case 8 :  write_channel_altera(relS[k][8], stable_uint2); break;
-            case 9 :  write_channel_altera(relS[k][9], stable_uint2); break;
-            case 10 : write_channel_altera(relS[k][10], stable_uint2); break;
-            case 11 : write_channel_altera(relS[k][11], stable_uint2); break;
-            case 12 : write_channel_altera(relS[k][12], stable_uint2); break;
-            case 13 : write_channel_altera(relS[k][13], stable_uint2); break;
-            case 14 : write_channel_altera(relS[k][14], stable_uint2); break;
-            case 15 : write_channel_altera(relS[k][15], stable_uint2); break;
         }
       }
     }
@@ -369,15 +353,15 @@ shuffled_type decoder(uchar opcode){
 __attribute__((task))
 __kernel void gather ()                
 {
-    bool engine_finish[16];  
-   #pragma unroll 16
-    for(int j = 0; j < 16; j ++)
+    bool engine_finish[8];  
+   #pragma unroll 8
+    for(int j = 0; j < 8; j ++)
       engine_finish[j] = false;
 
     
     while(true){
-      #pragma unroll 16
-        for(int i = 0; i < 16; i ++){ 
+      #pragma unroll 8
+        for(int i = 0; i < 8; i ++){ 
         // each collect engine do their work
     
            uint2 data_r[8];
@@ -416,9 +400,7 @@ __kernel void gather ()
 
       // low is active
       bool all_finish = engine_finish[0] | engine_finish[1] | engine_finish[2] | engine_finish[3] | 
-                        engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] |
-                        engine_finish[8] | engine_finish[9] | engine_finish[10]| engine_finish[11]| 
-                        engine_finish[12]| engine_finish[13]| engine_finish[14]| engine_finish[15];
+                        engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] ;
 
       bool valid_endflag = false;
       uint endFlagData;
@@ -435,13 +417,13 @@ __kernel void gather ()
 __attribute__((task))
 __kernel void filter(){
 
-    bool engine_finish[16];  
-   #pragma unroll 16
-    for(int j = 0; j < 16; j ++)
+    bool engine_finish[8];  
+   #pragma unroll 8
+    for(int j = 0; j < 8; j ++)
       engine_finish[j] = false;
     while(true){ 
-      #pragma unroll 16
-        for(int i = 0; i < 16; i ++){
+      #pragma unroll 8
+        for(int i = 0; i < 8; i ++){
             filter_type filter = read_channel_nb_altera(toFilterCh[i], &engine_finish[i]);
             if(engine_finish[i]){
                 for(int j = 0; j < filter.num; j ++){ 
@@ -453,9 +435,7 @@ __kernel void filter(){
     //printf("ck1\n");
       // low is active
       bool all_finish = engine_finish[0] | engine_finish[1] | engine_finish[2] | engine_finish[3] | 
-                        engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] |
-                        engine_finish[8] | engine_finish[9] | engine_finish[10]| engine_finish[11]| 
-                        engine_finish[12]| engine_finish[13]| engine_finish[14]| engine_finish[15];
+                        engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] ;
 
       bool valid_endflag = false;
       uint endFlagData;
@@ -479,8 +459,8 @@ __kernel void hashjoin (
 {
    // build phrase 
    //__local uint relR_l [RELR_L_SIZE];
-    uint2 hashtable_l [HASHTABLE_L_SIZE >> 4][16];
-    uint hashtable_bucket_cnt [HASHTABLE_BUCKET_NUM >> 4][16];
+    uint2 hashtable_l [HASHTABLE_L_SIZE >> 3][8];
+    uint hashtable_bucket_cnt [HASHTABLE_BUCKET_NUM >> 3][8];
 /*
     for(int i = 0; i < HASHTABLE_BUCKET_NUM; i ++){
       hashtable_bucket_cnt[i] = 0;
@@ -493,30 +473,28 @@ __kernel void hashjoin (
     }
 */
     uint rTableReadNum = rTableReadRange[0].y;
-    bool engine_finish[16];  
-   #pragma unroll 16
-    for(int j = 0; j < 16; j ++)
+    bool engine_finish[8];  
+   #pragma unroll 8
+    for(int j = 0; j < 8; j ++)
       engine_finish[j] = false;
 
     while(true){
-      #pragma unroll 16
-        for(int i = 0; i < 16; i ++){ 
+      #pragma unroll 8
+        for(int i = 0; i < 8; i ++){ 
         // each collect engine do their work
             // low is active
           uint2 tmp_data = read_channel_nb_altera (buildCh[i], &engine_finish[i]);
           if(engine_finish[i]){
             uint key  = tmp_data.x; 
             uint val  = tmp_data.y;
-            uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),4);
+            uint hash_idx = HASH (key,(HASHTABLE_BUCKET_NUM - 1),3);
             hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + hashtable_bucket_cnt[hash_idx][i]][i]= tmp_data;
             hashtable_bucket_cnt[hash_idx][i] ++; 
           }
         }
       // low is active
       bool all_finish = engine_finish[0] | engine_finish[1] | engine_finish[2] | engine_finish[3] | 
-                        engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] |
-                        engine_finish[8] | engine_finish[9] | engine_finish[10]| engine_finish[11]| 
-                        engine_finish[12]| engine_finish[13]| engine_finish[14]| engine_finish[15];
+                        engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] ;
 
       bool valid_endflag = false;
       uint endFlagData;
@@ -525,19 +503,17 @@ __kernel void hashjoin (
       if(endFlagData == ENDFLAG && !all_finish) break; 
     }
 
-
-
     //  =--------------------------------------probe phrase--------------------------------------------//
-    uint matchedCnt[16] = {0}; 
+    uint matchedCnt[8] = {0}; 
     uint iter = (sTableReadRange[0].y);
 
     
     while(1){
 
-       bool engine_finish[16] = {false};
+       bool engine_finish[8] = {false};
 
-    #pragma unroll 16
-      for(int i = 0; i < 16; i ++){
+    #pragma unroll 8
+      for(int i = 0; i < 8; i ++){
       // each collect engine do their work 
         bool valid_s[8] = {false};
         uint2 data_s[8];
@@ -548,11 +524,12 @@ __kernel void hashjoin (
 
           engine_finish[i] = valid_s[0] | valid_s[1] | valid_s[2]  | valid_s[3] | 
                              valid_s[4] | valid_s[5] | valid_s[6]  | valid_s[7] ;
+
         #pragma unroll
           for(int j = 0; j < 8; j ++){  
             if(valid_s[j]){
               uint key = data_s[j].x;
-              uint hash_idx = HASH (key, (HASHTABLE_BUCKET_NUM - 1),4);
+              uint hash_idx = HASH (key, (HASHTABLE_BUCKET_NUM - 1),3);
               //printf("probe key %d \n", key);
               for(int k = 0; k < HASHTABLE_BUCKET_SIZE; k ++){
                     //uint hashTable_val = hashtable_l[hash_idx * HASHTABLE_BUCKET_SIZE + j].y;
@@ -570,9 +547,7 @@ __kernel void hashjoin (
       }
       // low level is active
       bool all_finish = engine_finish[0] | engine_finish[1] | engine_finish[2] | engine_finish[3] | 
-                  engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] |
-                  engine_finish[8] | engine_finish[9] | engine_finish[10]| engine_finish[11]| 
-                  engine_finish[12]| engine_finish[13]| engine_finish[14]| engine_finish[15];
+                  engine_finish[4] | engine_finish[5] | engine_finish[6] | engine_finish[7] ;
 
       bool valid_endflag = false;
       uint endFlagData;
@@ -582,9 +557,9 @@ __kernel void hashjoin (
     }
  
     uint total_cnt = 0;
-  #pragma unroll 16
-    for(int i = 0; i < 16; i ++){
-        total_cnt += matchedCnt[i];
+  #pragma unroll 8
+    for(int i = 0; i < 8; i ++){
+        total_cnt += matchedCnt[i];//hashtable_l[1][i].x;
 
     }
     matchedTable[0] = total_cnt;
